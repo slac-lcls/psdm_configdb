@@ -42,3 +42,19 @@ def svc_get_hutches(configroot):
     """
     cdb = context.configdbclient.get_database(configroot)
     return JSONEncoder().encode([v['hutch'] for v in cdb.counters.find()])
+
+@ws_service_blueprint.route("/<configroot>/get_aliases/", methods=["GET"])
+def svc_get_aliases(configroot):
+    """
+    Return a list of all aliases in the hutch.
+    """
+    hutch = request.args.get("hutch", None)
+    cdb = context.configdbclient.get_database(configroot)
+    if hutch is None:
+        # FiXME revisit default
+        hc = cdb['tst']
+    else:
+        hc = cdb[hutch]
+    xx = [v['_id'] for v in hc.aggregate([{"$group": 
+                                              {"_id" : "$alias"}}])]
+    return JSONEncoder().encode(xx)
