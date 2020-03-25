@@ -10,6 +10,7 @@ from functools import wraps
 
 import requests
 from flask import Blueprint, jsonify, request, url_for, Response, send_file, abort
+from pymongo import DESCENDING
 
 import context
 
@@ -58,3 +59,50 @@ def svc_get_aliases(configroot):
     xx = [v['_id'] for v in hc.aggregate([{"$group": 
                                               {"_id" : "$alias"}}])]
     return JSONEncoder().encode(xx)
+
+@ws_service_blueprint.route("/<configroot>/get_devices/<alias>/", methods=["GET"])
+def svc_get_devices(configroot, alias):
+    """
+    Return a list of devices in the specified hutch.
+    """
+    hutch = request.args.get("hutch", "tst")    # FiXME revisit default
+    logger.debug("svc_get_devices: hutch=%s, alias=%s" % (hutch, alias))
+
+    cdb = context.configdbclient.get_database(configroot)
+    hc = cdb[hutch]
+
+    # get key from alias
+    d = hc.find({'alias' : alias}, session=None).sort('key', DESCENDING).limit(1)[0]
+    key = d['key']
+
+    c = hc.find_one({"key": key})
+    xx = [l['device'] for l in c["devices"]]
+    return JSONEncoder().encode(xx)
+
+@ws_service_blueprint.route("/<configroot>/get_configuration/<alias>/<device>/", methods=["GET"])
+def svc_get_configuration(configroot, alias, device):
+    """
+    Get the configuration for the specified device in the specified hutch
+    """
+    hutch = request.args.get("hutch", "tst")    # FiXME revisit default
+    logger.debug("svc_get_configuration: hutch=%s, alias=%s, device=%s" % (hutch, alias, device))
+
+    cdb = context.configdbclient.get_database(configroot)
+    hc = cdb[hutch]
+
+    # get key from alias
+    d = hc.find({'alias' : alias}, session=None).sort('key', DESCENDING).limit(1)[0]
+    key = d['key']
+
+    c = hc.find_one({"key": key})
+    cfg = None
+    for l in c["devices"]:
+        if l['device'] == device:
+            cfg = l['configs']
+            break
+    if cfg is None:
+        raise ValueError("get_configuration: No device %s!" % device)
+
+    cname = cfg[0]['collection']
+    r = cdb[cname].find_one({"_id" : cfg[0]['_id']})
+    return JSONEncoder().encode(r['config'])
