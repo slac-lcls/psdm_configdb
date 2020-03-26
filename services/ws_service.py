@@ -10,7 +10,7 @@ from functools import wraps
 
 import requests
 from flask import Blueprint, jsonify, request, url_for, Response, send_file, abort
-from pymongo import DESCENDING
+from pymongo import DESCENDING, ReturnDocument
 
 import context
 
@@ -52,7 +52,7 @@ def svc_get_aliases(configroot):
     hutch = request.args.get("hutch", None)
     cdb = context.configdbclient.get_database(configroot)
     if hutch is None:
-        # FiXME revisit default
+        # FIXME revisit default
         hc = cdb['tst']
     else:
         hc = cdb[hutch]
@@ -65,7 +65,7 @@ def svc_get_devices(configroot, alias):
     """
     Return a list of devices in the specified hutch.
     """
-    hutch = request.args.get("hutch", "tst")    # FiXME revisit default
+    hutch = request.args.get("hutch", "tst")    # FIXME revisit default
     logger.debug("svc_get_devices: hutch=%s, alias=%s" % (hutch, alias))
 
     cdb = context.configdbclient.get_database(configroot)
@@ -84,7 +84,7 @@ def svc_get_configuration(configroot, alias, device):
     """
     Get the configuration for the specified device in the specified hutch
     """
-    hutch = request.args.get("hutch", "tst")    # FiXME revisit default
+    hutch = request.args.get("hutch", "tst")    # FIXME revisit default
     logger.debug("svc_get_configuration: hutch=%s, alias=%s, device=%s" % (hutch, alias, device))
 
     cdb = context.configdbclient.get_database(configroot)
@@ -106,3 +106,48 @@ def svc_get_configuration(configroot, alias, device):
     cname = cfg[0]['collection']
     r = cdb[cname].find_one({"_id" : cfg[0]['_id']})
     return JSONEncoder().encode(r['config'])
+
+@ws_service_blueprint.route("/<configroot>/print_configs/", methods=["GET"])
+def svc_print_configs(configroot):
+    """
+    Print all of the configurations for the hutch (to a string).
+    """
+    hutch = request.args.get("hutch", "tst")    # FIXME revisit default
+    logger.debug("svc_print_configs: hutch=%s" % hutch)
+
+    cdb = context.configdbclient.get_database(configroot)
+    hc = cdb[hutch]
+
+    outstring = ""
+    for v in hc.find():
+        outstring += "%s\n" % v
+    return JSONEncoder().encode(outstring)
+
+@ws_service_blueprint.route("/<configroot>/add_alias/<alias>/", methods=["GET"])
+def svc_add_alias(configroot, alias):
+    """
+    Create a new alias in the hutch, if it doesn't already exist.
+    """
+    hutch = request.args.get("hutch", "tst")    # FIXME revisit default
+    logger.debug("svc_add_alias: hutch=%s, alias=%s" % (hutch, alias))
+
+    cdb = context.configdbclient.get_database(configroot)
+    hc = cdb[hutch]
+
+    session = None
+    if hc.find_one({'alias': alias}, session=session) is None:
+        logger.debug("svc_add_alias: alias not found")
+
+        d = cdb.counters.find_one_and_update({'hutch': hutch},
+                                                  {'$inc': {'seq': 1}},
+                                                  session=session,
+                                                  return_document=ReturnDocument.AFTER)
+        kn = d['seq']
+        hc.insert_one({
+            "date": datetime.utcnow(),
+            "alias": alias, "key": kn,
+            "devices": []}, session=session)
+    else:
+        logger.debug("svc_add_alias: alias already exists")
+
+    return JSONEncoder().encode("OK")
