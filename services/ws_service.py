@@ -45,28 +45,22 @@ def svc_get_hutches(configroot):
     cdb = context.configdbclient.get_database(configroot)
     return JSONEncoder().encode([v['hutch'] for v in cdb.counters.find()])
 
-@ws_service_blueprint.route("/<configroot>/get_aliases/", methods=["GET"])
-def svc_get_aliases(configroot):
+@ws_service_blueprint.route("/<configroot>/get_aliases/<hutch>/", methods=["GET"])
+def svc_get_aliases(configroot, hutch):
     """
     Return a list of all aliases in the hutch.
     """
-    hutch = request.args.get("hutch", None)
     cdb = context.configdbclient.get_database(configroot)
-    if hutch is None:
-        # FIXME revisit default
-        hc = cdb['tst']
-    else:
-        hc = cdb[hutch]
+    hc = cdb[hutch]
     xx = [v['_id'] for v in hc.aggregate([{"$group": 
                                               {"_id" : "$alias"}}])]
     return JSONEncoder().encode(xx)
 
-@ws_service_blueprint.route("/<configroot>/get_devices/<alias>/", methods=["GET"])
-def svc_get_devices(configroot, alias):
+@ws_service_blueprint.route("/<configroot>/get_devices/<hutch>/<alias>/", methods=["GET"])
+def svc_get_devices(configroot, hutch, alias):
     """
     Return a list of devices in the specified hutch.
     """
-    hutch = request.args.get("hutch", "tst")    # FIXME revisit default
     logger.debug("svc_get_devices: hutch=%s, alias=%s" % (hutch, alias))
 
     cdb = context.configdbclient.get_database(configroot)
@@ -80,12 +74,11 @@ def svc_get_devices(configroot, alias):
     xx = [l['device'] for l in c["devices"]]
     return JSONEncoder().encode(xx)
 
-@ws_service_blueprint.route("/<configroot>/get_configuration/<alias>/<device>/", methods=["GET"])
-def svc_get_configuration(configroot, alias, device):
+@ws_service_blueprint.route("/<configroot>/get_configuration/<hutch>/<alias>/<device>/", methods=["GET"])
+def svc_get_configuration(configroot, hutch, alias, device):
     """
     Get the configuration for the specified device in the specified hutch
     """
-    hutch = request.args.get("hutch", "tst")    # FIXME revisit default
     logger.debug("svc_get_configuration: hutch=%s, alias=%s, device=%s" % (hutch, alias, device))
 
     cdb = context.configdbclient.get_database(configroot)
@@ -112,12 +105,11 @@ def svc_get_configuration(configroot, alias, device):
 
     return JSONEncoder().encode(r['config'])
 
-@ws_service_blueprint.route("/<configroot>/print_configs/", methods=["GET"])
-def svc_print_configs(configroot):
+@ws_service_blueprint.route("/<configroot>/print_configs/<hutch>/", methods=["GET"])
+def svc_print_configs(configroot, hutch):
     """
     Print all of the configurations for the hutch (to a string).
     """
-    hutch = request.args.get("hutch", "tst")    # FIXME revisit default
     logger.debug("svc_print_configs: hutch=%s" % hutch)
 
     cdb = context.configdbclient.get_database(configroot)
@@ -128,42 +120,32 @@ def svc_print_configs(configroot):
         outstring += "%s\n" % v
     return JSONEncoder().encode(outstring)
 
-# Return the highest key for the specified alias, or highest + 1 for all
-# aliases in the hutch if not specified.
+# Return highest + 1 key for all aliases in the hutch.
 def get_key(cdb, hutch):
-    alias = None
-    session = None
-
     try:
-        if isinstance(alias, str) or (sys.version_info.major == 2 and
-                                      isinstance(alias, unicode)):
-            d = cdb[hutch].find({'alias' : alias}, session=session).sort('key', DESCENDING).limit(1)[0]
-            return d['key']
-        else:
-            d = cdb.counters.find_one_and_update({'hutch': hutch},
-                                                      {'$inc': {'seq': 1}},
-                                                      session=session,
-                                                      return_document=ReturnDocument.AFTER)
-            return d['seq']
+        d = cdb.counters.find_one_and_update({'hutch': hutch},
+                                                  {'$inc': {'seq': 1}},
+                                                  session=None,
+                                                  return_document=ReturnDocument.AFTER)
+        return d['seq']
     except:
-        raise NameError('Failed to get key for alias/hutch:'+alias+' '+hutch)
+        raise NameError('Failed to get key for hutch: '+hutch)
 
 # Return the current entry (with the highest key) for the specified alias.
 def get_current(configroot, alias, hutch):
-    session = None
     cdb = context.configdbclient.get_database(configroot)
     hc = cdb[hutch]
     try:
-        return hc.find({"alias": alias}, session=session).sort('key', DESCENDING).limit(1)[0]
+        return hc.find({"alias": alias}, session=None).sort('key', DESCENDING).limit(1)[0]
     except:
         raise NameError('Failed to get current key for alias/hutch:'+alias+' '+hutch)
 
-@ws_service_blueprint.route("/<configroot>/add_alias/<alias>/", methods=["GET"])
-def svc_add_alias(configroot, alias):
+
+@ws_service_blueprint.route("/<configroot>/add_alias/<hutch>/<alias>/", methods=["GET"])
+def svc_add_alias(configroot, hutch, alias):
     """
     Create a new alias in the hutch, if it doesn't already exist.
     """
-    hutch = request.args.get("hutch", "tst")    # FIXME revisit default
     logger.debug("svc_add_alias: hutch=%s, alias=%s" % (hutch, alias))
 
     cdb = context.configdbclient.get_database(configroot)
