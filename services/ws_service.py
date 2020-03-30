@@ -170,6 +170,25 @@ def svc_add_alias(configroot, hutch, alias):
     return JSONEncoder().encode("OK")
 
 
+# Create a new device_configuration if it doesn't already exist!
+@ws_service_blueprint.route("/<configroot>/add_device_config/<cfg>/", methods=["GET"])
+def svc_add_device_config(configroot, cfg):
+    session = None
+    cdb = context.configdbclient.get_database(configroot)
+    # Validate name?
+    if cdb[cfg].count_documents({}) != 0:
+        return JSONEncoder().encode("Device config '%s' already exists" % cfg)
+
+    try:
+        cdb.create_collection(cfg)
+    except:
+        pass
+    cdb[cfg].insert_one({'config': {}}, session=session)
+    cfg_coll = cdb.device_configurations
+    cfg_coll.insert_one({'collection': cfg}, session=session)
+    return JSONEncoder().encode("OK")
+
+
 # Save a device configuration and return an object ID.  Try to find it if 
 # it already exists! Value should be a typed json dictionary.
 def save_device_config(cdb, cfg, value):
