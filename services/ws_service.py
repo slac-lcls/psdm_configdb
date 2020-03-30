@@ -4,6 +4,7 @@ The web service endpoints for the config db.
 import os
 import json
 import logging
+import sys
 import uuid
 from datetime import datetime
 from functools import wraps
@@ -105,6 +106,10 @@ def svc_get_configuration(configroot, alias, device):
 
     cname = cfg[0]['collection']
     r = cdb[cname].find_one({"_id" : cfg[0]['_id']})
+
+    if "detType:RO" in r['config'].keys():
+        logger.debug("svc_get_configuration: detType:RO=%s" % r['config']['detType:RO'])
+
     return JSONEncoder().encode(r['config'])
 
 @ws_service_blueprint.route("/<configroot>/print_configs/", methods=["GET"])
@@ -122,6 +127,36 @@ def svc_print_configs(configroot):
     for v in hc.find():
         outstring += "%s\n" % v
     return JSONEncoder().encode(outstring)
+
+# Return the highest key for the specified alias, or highest + 1 for all
+# aliases in the hutch if not specified.
+def get_key(cdb, hutch):
+    alias = None
+    session = None
+
+    try:
+        if isinstance(alias, str) or (sys.version_info.major == 2 and
+                                      isinstance(alias, unicode)):
+            d = cdb[hutch].find({'alias' : alias}, session=session).sort('key', DESCENDING).limit(1)[0]
+            return d['key']
+        else:
+            d = cdb.counters.find_one_and_update({'hutch': hutch},
+                                                      {'$inc': {'seq': 1}},
+                                                      session=session,
+                                                      return_document=ReturnDocument.AFTER)
+            return d['seq']
+    except:
+        raise NameError('Failed to get key for alias/hutch:'+alias+' '+hutch)
+
+# Return the current entry (with the highest key) for the specified alias.
+def get_current(configroot, alias, hutch):
+    session = None
+    cdb = context.configdbclient.get_database(configroot)
+    hc = cdb[hutch]
+    try:
+        return hc.find({"alias": alias}, session=session).sort('key', DESCENDING).limit(1)[0]
+    except:
+        raise NameError('Failed to get current key for alias/hutch:'+alias+' '+hutch)
 
 @ws_service_blueprint.route("/<configroot>/add_alias/<alias>/", methods=["GET"])
 def svc_add_alias(configroot, alias):
@@ -151,3 +186,69 @@ def svc_add_alias(configroot, alias):
         logger.debug("svc_add_alias: alias already exists")
 
     return JSONEncoder().encode("OK")
+
+
+# Save a device configuration and return an object ID.  Try to find it if 
+# it already exists! Value should be a typed json dictionary.
+def save_device_config(cdb, cfg, value):
+    session = None
+    if cdb[cfg].count_documents({}, session=session) == 0:
+        raise NameError("save_device_config: No documents found for %s." % cfg)
+    try:
+        d = cdb[cfg].find_one({'config': value}, session=session)
+        return d['_id']
+    except:
+        pass
+
+    r = cdb[cfg].insert_one({'config': value}, session=session)
+    return r.inserted_id
+
+
+@ws_service_blueprint.route("/<configroot>/modify_device/<hutch>/<alias>/<device>/", methods=["GET"])
+def svc_modify_device(configroot, hutch, alias, device):
+    """
+    Modify the current configuration for a specific device, adding it if
+    necessary.  device is the device name and POST value is a json dictionary for the
+    configuration.  Return the new configuration key if successful and
+    raise an error if we fail.
+    """
+    logger.debug("svc_modify_device: hutch=%s, alias=%s, device=%s" % (hutch, alias, device))
+
+    # get POST data
+    value = request.get_json(silent=False)
+
+    if value is None:
+        return JSONEncoder().encode("ERROR no POST data")
+    elif not "detType:RO" in value.keys():
+        return JSONEncoder().encode("ERROR no detType set")
+
+    # set device name
+    value['detName:RO'] = device
+    logger.debug("svc_modify_device: value=%s" % value)
+
+    cdb = context.configdbclient.get_database(configroot)
+    hc = cdb[hutch]
+
+    c = get_current(configroot, alias, hutch)
+    if c is None:
+        return JSONEncoder().encode("ERROR %s is not a configuration name!" % alias)
+
+    session = None
+    collection = value["detType:RO"]
+    cfg = {'_id': save_device_config(cdb, collection, value),
+           'collection': collection}
+    del c['_id']
+    for l in c['devices']:
+        if l['device'] == device:
+            if l['configs'] == [cfg]:
+                raise ValueError("modify_device error: No config values changed.")
+            c['devices'].remove(l)
+            break
+    kn = get_key(cdb, hutch)
+    c['key'] = kn
+    c['devices'].append({'device': device, 'configs': [cfg]})
+    c['devices'].sort(key=lambda x: x['device'])
+    c['date'] = datetime.utcnow()
+    hc.insert_one(c, session=session)
+
+    return JSONEncoder().encode(kn)
