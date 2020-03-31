@@ -45,6 +45,16 @@ def svc_get_hutches(configroot):
     cdb = context.configdbclient.get_database(configroot)
     return JSONEncoder().encode([v['hutch'] for v in cdb.counters.find()])
 
+@ws_service_blueprint.route("/<configroot>/get_device_configs/", methods=["GET"])
+def svc_get_device_configs(configroot):
+    """
+    Return a list of all device configurations.
+    """
+    cdb = context.configdbclient.get_database(configroot)
+    cfg_coll = cdb.device_configurations
+    xx = [v['collection'] for v in cfg_coll.find()]
+    return JSONEncoder().encode(xx)
+
 @ws_service_blueprint.route("/<configroot>/get_aliases/<hutch>/", methods=["GET"])
 def svc_get_aliases(configroot, hutch):
     """
