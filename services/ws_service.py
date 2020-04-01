@@ -232,9 +232,11 @@ def svc_modify_device(configroot, hutch, alias, device):
         return JSONEncoder().encode("ERROR no POST data")
     elif not "detType:RO" in value.keys():
         return JSONEncoder().encode("ERROR no detType set")
+    elif not "detName:RO" in value.keys():
+        # set device name
+        logger.info("Setting detName to %s" % device)
+        value['detName:RO'] = device
 
-    # set device name
-    value['detName:RO'] = device
     logger.debug("svc_modify_device: value=%s" % value)
 
     cdb = context.configdbclient.get_database(configroot)
@@ -263,3 +265,32 @@ def svc_modify_device(configroot, hutch, alias, device):
     hc.insert_one(c, session=session)
 
     return JSONEncoder().encode(kn)
+
+
+@ws_service_blueprint.route("/<configroot>/create_collections/<hutch>/", methods=["GET"])
+def svc_create_collections(configroot, hutch):
+    """
+    Create hutch.
+    """
+    logger.debug("svc_create_collections: hutch=%s" % hutch)
+
+    cdb = context.configdbclient.get_database(configroot)
+    try:
+        cdb.create_collection("device_configurations")
+    except:
+        pass
+    try:
+        cdb.create_collection("counters")
+    except:
+        pass
+    try:
+        cdb.create_collection(hutch)
+    except:
+        pass
+    try:
+        if not cdb.counters.find_one({'hutch': hutch}):
+            cdb.counters.insert_one({'hutch': hutch, 'seq': -1})
+    except:
+        pass
+
+    return JSONEncoder().encode("OK")
