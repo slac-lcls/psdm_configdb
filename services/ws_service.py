@@ -115,6 +115,22 @@ def svc_get_configuration(configroot, hutch, alias, device):
 
     return JSONEncoder().encode(r['config'])
 
+@ws_service_blueprint.route("/<configroot>/print_device_configs/<name>/", methods=["GET"])
+def svc_print_device_configs(configroot, name):
+    """
+    Print all of the device configurations, or all of the configurations
+    for a specified device (to a string).
+    For all device configurations, specify name='device_configurations'.
+    """
+    logger.debug("svc_print_device_configs: name=%s" % name)
+
+    cdb = context.configdbclient.get_database(configroot)
+
+    outstring = ""
+    for v in cdb[name].find():
+        outstring += "%s\n" % v
+    return JSONEncoder().encode(outstring)
+
 @ws_service_blueprint.route("/<configroot>/print_configs/<hutch>/", methods=["GET"])
 def svc_print_configs(configroot, hutch):
     """
