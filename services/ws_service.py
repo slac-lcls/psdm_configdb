@@ -231,15 +231,14 @@ def save_device_config(cdb, cfg, value):
     return r.inserted_id
 
 
-@ws_service_blueprint.route("/<configroot>/modify_device/<hutch>/<alias>/<device>/", methods=["GET"])
-def svc_modify_device(configroot, hutch, alias, device):
+@ws_service_blueprint.route("/<configroot>/modify_device/<hutch>/<alias>/", methods=["GET"])
+def svc_modify_device(configroot, hutch, alias):
     """
     Modify the current configuration for a specific device, adding it if
     necessary.  device is the device name and POST value is a json dictionary for the
     configuration.  Return the new configuration key if successful and
     raise an error if we fail.
     """
-    logger.debug("svc_modify_device: hutch=%s, alias=%s, device=%s" % (hutch, alias, device))
 
     # get POST data
     value = request.get_json(silent=False)
@@ -249,11 +248,10 @@ def svc_modify_device(configroot, hutch, alias, device):
     elif not "detType:RO" in value.keys():
         return JSONEncoder().encode("ERROR no detType set")
     elif not "detName:RO" in value.keys():
-        # set device name
-        logger.info("Setting detName to %s" % device)
-        value['detName:RO'] = device
+        return JSONEncoder().encode("ERROR no detName set")
 
-    logger.debug("svc_modify_device: value=%s" % value)
+    device = value['detName:RO']
+    logger.debug("svc_modify_device: hutch=%s, alias=%s, device=%s" % (hutch, alias, device))
 
     cdb = context.configdbclient.get_database(configroot)
     hc = cdb[hutch]
