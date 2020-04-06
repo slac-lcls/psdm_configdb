@@ -11,9 +11,11 @@ from functools import wraps
 
 import requests
 from flask import Blueprint, jsonify, request, url_for, Response, send_file, abort
-from pymongo import DESCENDING, ReturnDocument
+from pymongo import ASCENDING, DESCENDING, ReturnDocument
+from psalg.configdb.typed_json import *
 
 import context
+import numpy
 
 
 __author__ = 'mshankar@slac.stanford.edu'
@@ -31,9 +33,9 @@ class JSONEncoder(json.JSONEncoder):
         if isinstance(o, float) and not math.isfinite(o):
             return str(o)
         elif isinstance(o, datetime):
-            # Use var d = new Date(str) in JS to deserialize
-            # d.toJSON() in JS to convert to a string readable by datetime.strptime(str, '%Y-%m-%dT%H:%M:%S.%fZ')
             return o.isoformat()
+        elif isinstance(o, numpy.ndarray):
+            return o.tolist()
         return json.JSONEncoder.default(self, o)
 
 
@@ -72,16 +74,20 @@ def svc_get_devices(configroot, hutch, alias):
     Return a list of devices in the specified hutch.
     """
     logger.debug("svc_get_devices: hutch=%s, alias=%s" % (hutch, alias))
+    try:
+        cdb = context.configdbclient.get_database(configroot)
+        hc = cdb[hutch]
 
-    cdb = context.configdbclient.get_database(configroot)
-    hc = cdb[hutch]
+        # get key from alias
+        d = hc.find({'alias' : alias}, session=None).sort('key', DESCENDING).limit(1)[0]
+        key = d['key']
 
-    # get key from alias
-    d = hc.find({'alias' : alias}, session=None).sort('key', DESCENDING).limit(1)[0]
-    key = d['key']
+        c = hc.find_one({"key": key})
+        xx = [l['device'] for l in c["devices"]]
+    except Exception as ex:
+        logger.error("svc_get_devices: %s" % ex)
+        xx = []
 
-    c = hc.find_one({"key": key})
-    xx = [l['device'] for l in c["devices"]]
     return JSONEncoder().encode(xx)
 
 @ws_service_blueprint.route("/<configroot>/get_configuration/<hutch>/<alias>/<device>/", methods=["GET"])
@@ -146,16 +152,39 @@ def svc_print_configs(configroot, hutch):
         outstring += "%s\n" % v
     return JSONEncoder().encode(outstring)
 
-# Return highest + 1 key for all aliases in the hutch.
-def get_key(cdb, hutch):
+# Return the highest key for the specified alias, or highest + 1 for all
+# aliases in the hutch if not specified.
+def get_key(cdb, hutch, alias=None):
+    session = None
+    logger.debug("get_key: hutch=%s alias=%s" % (hutch, alias))
     try:
-        d = cdb.counters.find_one_and_update({'hutch': hutch},
-                                                  {'$inc': {'seq': 1}},
-                                                  session=None,
-                                                  return_document=ReturnDocument.AFTER)
-        return d['seq']
+        if isinstance(alias, str) or (sys.version_info.major == 2 and
+                                      isinstance(alias, unicode)):
+            d = cdb[hutch].find({'alias' : alias}, session=session).sort('key', DESCENDING).limit(1)[0]
+            return d['key']
+        else:
+            d = cdb.counters.find_one_and_update({'hutch': hutch},
+                                                      {'$inc': {'seq': 1}},
+                                                      session=session,
+                                                      return_document=ReturnDocument.AFTER)
+            return d['seq']
     except:
-        raise NameError('Failed to get key for hutch: '+hutch)
+        if alias is None:
+            raise NameError('Failed to get key for hutch:'+hutch)
+        else:
+            raise NameError('Failed to get key for alias/hutch:'+alias+'/'+hutch)
+
+@ws_service_blueprint.route("/<configroot>/get_key/<hutch>/", methods=["GET"])
+def svc_get_key(configroot, hutch):
+    """
+    Return the highest key for the specified alias, or highest + 1 for all
+    aliases in the hutch if not specified.
+    """
+    alias = request.args.get("alias", None)
+
+    cdb = context.configdbclient.get_database(configroot)
+
+    return JSONEncoder().encode(get_key(cdb, hutch, alias))
 
 # Return the current entry (with the highest key) for the specified alias.
 def get_current(configroot, alias, hutch):
@@ -179,7 +208,6 @@ def svc_add_alias(configroot, hutch, alias):
 
     session = None
     if hc.find_one({'alias': alias}, session=session) is None:
-        logger.debug("svc_add_alias: alias not found")
 
         d = cdb.counters.find_one_and_update({'hutch': hutch},
                                                   {'$inc': {'seq': 1}},
@@ -308,3 +336,38 @@ def svc_create_collections(configroot, hutch):
         pass
 
     return JSONEncoder().encode("OK")
+
+@ws_service_blueprint.route("/<configroot>/get_history/<hutch>/<alias>/<device>/", methods=["GET"])
+def svc_get_history(configroot, hutch, alias, device):
+    """
+    Get the history of the device configuration for the variables 
+    in plist.  The variables are dot-separated names with the first
+    component being the the device configuration name.
+    """
+    # get POST data
+    plist = request.get_json(silent=False)
+    if plist is None:
+        logger.error("svc_get_history: no POST data")
+        return JSONEncoder().encode([])
+
+    logger.debug("svc_get_history: hutch=%s alias=%s device=%s plist=%s" %
+                 (hutch, alias, device, plist))
+
+    cdb = context.configdbclient.get_database(configroot)
+    hc = cdb[hutch]
+    pipeline = [
+        {"$unwind": "$devices"},
+        {"$match": {'alias': alias, 'devices.device': device}},
+        {"$sort":  {'key': ASCENDING}}
+    ]
+    l = []
+    for c in list(hc.aggregate(pipeline)):
+        d = {'date': c['date'], 'key': c['key']}
+        cfg = c['devices']['configs'][0]
+        r = cdb[cfg['collection']].find_one({"_id" : cfg["_id"]})
+        cl = cdict(r['config'])
+        for p in plist:
+            d[p] = cl.get(p)
+        l.append(d)
+
+    return JSONEncoder().encode(l)
