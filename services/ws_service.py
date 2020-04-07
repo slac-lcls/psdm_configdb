@@ -24,9 +24,25 @@ ws_service_blueprint = Blueprint('ws_service_api', __name__)
 
 logger = logging.getLogger(__name__)
 
-def logAndAbort(error_msg):
-    logger.error(error_msg)
-    return Response(error_msg, status=500)
+# _version = [1, 0, 0]
+
+_version = { 'major': 1, 'minor': 0, 'micro': 0 }
+
+# generic response
+def response(status_code, success, msg, value):
+    rv = { 'status_code': status_code,
+           'success':     success,
+           'msg':         msg,
+           'value':       value }
+    return JSONEncoder().encode(rv)
+
+# OK response
+def ok_response(*, status_code=200, success=True, msg='OK', value=[]):
+    return response(status_code, success, msg, value)
+
+# ERROR response
+def error_response(*, status_code=500, success=False, msg='ERROR', value=[]):
+    return response(status_code, success, msg, value)
 
 class JSONEncoder(json.JSONEncoder):
     def default(self, o):
@@ -39,13 +55,21 @@ class JSONEncoder(json.JSONEncoder):
         return json.JSONEncoder.default(self, o)
 
 
+@ws_service_blueprint.route("/<configroot>/get_version/", methods=["GET"])
+def svc_get_version(configroot):
+    """
+    Get version as list [major, minor, micro]
+    """
+    return ok_response(value = _version)
+
 @ws_service_blueprint.route("/<configroot>/get_hutches/", methods=["GET"])
 def svc_get_hutches(configroot):
     """
     Get a list of hutches available in the config db
     """
     cdb = context.configdbclient.get_database(configroot)
-    return JSONEncoder().encode([v['hutch'] for v in cdb.counters.find()])
+    xx = [v['hutch'] for v in cdb.counters.find()]
+    return ok_response(value = xx)
 
 @ws_service_blueprint.route("/<configroot>/get_device_configs/", methods=["GET"])
 def svc_get_device_configs(configroot):
@@ -55,7 +79,7 @@ def svc_get_device_configs(configroot):
     cdb = context.configdbclient.get_database(configroot)
     cfg_coll = cdb.device_configurations
     xx = [v['collection'] for v in cfg_coll.find()]
-    return JSONEncoder().encode(xx)
+    return ok_response(value = xx)
 
 @ws_service_blueprint.route("/<configroot>/get_aliases/<hutch>/", methods=["GET"])
 def svc_get_aliases(configroot, hutch):
@@ -66,7 +90,7 @@ def svc_get_aliases(configroot, hutch):
     hc = cdb[hutch]
     xx = [v['_id'] for v in hc.aggregate([{"$group": 
                                               {"_id" : "$alias"}}])]
-    return JSONEncoder().encode(xx)
+    return ok_response(value = xx)
 
 @ws_service_blueprint.route("/<configroot>/get_devices/<hutch>/<alias>/", methods=["GET"])
 def svc_get_devices(configroot, hutch, alias):
@@ -85,10 +109,9 @@ def svc_get_devices(configroot, hutch, alias):
         c = hc.find_one({"key": key})
         xx = [l['device'] for l in c["devices"]]
     except Exception as ex:
-        logger.error("svc_get_devices: %s" % ex)
-        xx = []
+        return error_response(msg = "get_devices: %s" % ex, value = [])
 
-    return JSONEncoder().encode(xx)
+    return ok_response(value = xx)
 
 @ws_service_blueprint.route("/<configroot>/get_configuration/<hutch>/<alias>/<device>/", methods=["GET"])
 def svc_get_configuration(configroot, hutch, alias, device):
@@ -101,7 +124,11 @@ def svc_get_configuration(configroot, hutch, alias, device):
     hc = cdb[hutch]
 
     # get key from alias
-    d = hc.find({'alias' : alias}, session=None).sort('key', DESCENDING).limit(1)[0]
+    try:
+        d = hc.find({'alias' : alias}, session=None).sort('key', DESCENDING).limit(1)[0]
+    except IndexError:
+        return error_response(msg = "get_configuration: No alias %s!" % alias)
+
     key = d['key']
 
     c = hc.find_one({"key": key})
@@ -111,15 +138,12 @@ def svc_get_configuration(configroot, hutch, alias, device):
             cfg = l['configs']
             break
     if cfg is None:
-        raise ValueError("get_configuration: No device %s!" % device)
+        return error_response(msg = "get_configuration: No device %s!" % device)
 
     cname = cfg[0]['collection']
     r = cdb[cname].find_one({"_id" : cfg[0]['_id']})
 
-    if "detType:RO" in r['config'].keys():
-        logger.debug("svc_get_configuration: detType:RO=%s" % r['config']['detType:RO'])
-
-    return JSONEncoder().encode(r['config'])
+    return ok_response(value = r['config'])
 
 @ws_service_blueprint.route("/<configroot>/print_device_configs/<name>/", methods=["GET"])
 def svc_print_device_configs(configroot, name):
@@ -135,7 +159,7 @@ def svc_print_device_configs(configroot, name):
     outstring = ""
     for v in cdb[name].find():
         outstring += "%s\n" % v
-    return JSONEncoder().encode(outstring)
+    return ok_response(value = outstring)
 
 @ws_service_blueprint.route("/<configroot>/print_configs/<hutch>/", methods=["GET"])
 def svc_print_configs(configroot, hutch):
@@ -150,7 +174,7 @@ def svc_print_configs(configroot, hutch):
     outstring = ""
     for v in hc.find():
         outstring += "%s\n" % v
-    return JSONEncoder().encode(outstring)
+    return ok_response(value = outstring)
 
 # Return the highest key for the specified alias, or highest + 1 for all
 # aliases in the hutch if not specified.
@@ -184,7 +208,12 @@ def svc_get_key(configroot, hutch):
 
     cdb = context.configdbclient.get_database(configroot)
 
-    return JSONEncoder().encode(get_key(cdb, hutch, alias))
+    try:
+        kk = get_key(cdb, hutch, alias)
+    except Exception as ex:
+        return error_response(msg = "get_key: %s" % ex)
+
+    return ok_response(value = kk)
 
 # Return the current entry (with the highest key) for the specified alias.
 def get_current(configroot, alias, hutch):
@@ -221,7 +250,7 @@ def svc_add_alias(configroot, hutch, alias):
     else:
         logger.debug("svc_add_alias: alias already exists")
 
-    return JSONEncoder().encode("OK")
+    return ok_response()
 
 
 # Create a new device_configuration if it doesn't already exist!
@@ -231,7 +260,7 @@ def svc_add_device_config(configroot, cfg):
     cdb = context.configdbclient.get_database(configroot)
     # Validate name?
     if cdb[cfg].count_documents({}) != 0:
-        return JSONEncoder().encode("Device config '%s' already exists" % cfg)
+        return error_response(msg = "Device config '%s' already exists" % cfg)
 
     try:
         cdb.create_collection(cfg)
@@ -240,7 +269,7 @@ def svc_add_device_config(configroot, cfg):
     cdb[cfg].insert_one({'config': {}}, session=session)
     cfg_coll = cdb.device_configurations
     cfg_coll.insert_one({'collection': cfg}, session=session)
-    return JSONEncoder().encode("OK")
+    return ok_response()
 
 
 # Save a device configuration and return an object ID.  Try to find it if 
@@ -272,11 +301,11 @@ def svc_modify_device(configroot, hutch, alias):
     value = request.get_json(silent=False)
 
     if value is None:
-        return JSONEncoder().encode("ERROR no POST data")
+        return error_response(msg = "No POST data")
     elif not "detType:RO" in value.keys():
-        return JSONEncoder().encode("ERROR no detType set")
+        return error_response(msg = "No detType set")
     elif not "detName:RO" in value.keys():
-        return JSONEncoder().encode("ERROR no detName set")
+        return error_response(msg = "No detName set")
 
     device = value['detName:RO']
     logger.debug("svc_modify_device: hutch=%s, alias=%s, device=%s" % (hutch, alias, device))
@@ -286,7 +315,7 @@ def svc_modify_device(configroot, hutch, alias):
 
     c = get_current(configroot, alias, hutch)
     if c is None:
-        return JSONEncoder().encode("ERROR %s is not a configuration name!" % alias)
+        return error_response(msg = "%s is not a configuration name!" % alias)
 
     session = None
     collection = value["detType:RO"]
@@ -296,7 +325,7 @@ def svc_modify_device(configroot, hutch, alias):
     for l in c['devices']:
         if l['device'] == device:
             if l['configs'] == [cfg]:
-                raise ValueError("modify_device error: No config values changed.")
+                return error_response(msg = "modify_device: No config values changed.")
             c['devices'].remove(l)
             break
     kn = get_key(cdb, hutch)
@@ -306,7 +335,7 @@ def svc_modify_device(configroot, hutch, alias):
     c['date'] = datetime.utcnow()
     hc.insert_one(c, session=session)
 
-    return JSONEncoder().encode(kn)
+    return ok_response(value = kn)
 
 
 @ws_service_blueprint.route("/<configroot>/create_collections/<hutch>/", methods=["GET"])
@@ -335,7 +364,7 @@ def svc_create_collections(configroot, hutch):
     except:
         pass
 
-    return JSONEncoder().encode("OK")
+    return ok_response()
 
 @ws_service_blueprint.route("/<configroot>/get_history/<hutch>/<alias>/<device>/", methods=["GET"])
 def svc_get_history(configroot, hutch, alias, device):
@@ -347,8 +376,7 @@ def svc_get_history(configroot, hutch, alias, device):
     # get POST data
     plist = request.get_json(silent=False)
     if plist is None:
-        logger.error("svc_get_history: no POST data")
-        return JSONEncoder().encode([])
+        return error_response(msg = "get_history: no POST data", value = [])
 
     logger.debug("svc_get_history: hutch=%s alias=%s device=%s plist=%s" %
                  (hutch, alias, device, plist))
@@ -370,4 +398,4 @@ def svc_get_history(configroot, hutch, alias, device):
             d[p] = cl.get(p)
         l.append(d)
 
-    return JSONEncoder().encode(l)
+    return ok_response(value = l)
