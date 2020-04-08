@@ -313,7 +313,11 @@ def svc_modify_device(configroot, hutch, alias):
     cdb = context.configdbclient.get_database(configroot)
     hc = cdb[hutch]
 
-    c = get_current(configroot, alias, hutch)
+    try:
+        c = get_current(configroot, alias, hutch)
+    except Exception as ex:
+        return error_response(msg = "%s" % ex)
+
     if c is None:
         return error_response(msg = "%s is not a configuration name!" % alias)
 
@@ -328,7 +332,10 @@ def svc_modify_device(configroot, hutch, alias):
                 return error_response(msg = "modify_device: No config values changed.")
             c['devices'].remove(l)
             break
-    kn = get_key(cdb, hutch)
+    try:
+        kn = get_key(cdb, hutch)
+    except Exception as ex:
+        return error_response(msg = "%s" % ex)
     c['key'] = kn
     c['devices'].append({'device': device, 'configs': [cfg]})
     c['devices'].sort(key=lambda x: x['device'])
