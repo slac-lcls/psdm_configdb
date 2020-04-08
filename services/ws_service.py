@@ -24,8 +24,6 @@ ws_service_blueprint = Blueprint('ws_service_api', __name__)
 
 logger = logging.getLogger(__name__)
 
-# _version = [1, 0, 0]
-
 _version = { 'major': 1, 'minor': 0, 'micro': 0 }
 
 # generic response
@@ -58,7 +56,7 @@ class JSONEncoder(json.JSONEncoder):
 @ws_service_blueprint.route("/<configroot>/get_version/", methods=["GET"])
 def svc_get_version(configroot):
     """
-    Get version as list [major, minor, micro]
+    Get version as dictionary
     """
     return ok_response(value = _version)
 
