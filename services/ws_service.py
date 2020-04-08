@@ -12,7 +12,7 @@ from functools import wraps
 import requests
 from flask import Blueprint, jsonify, request, url_for, Response, send_file, abort
 from pymongo import ASCENDING, DESCENDING, ReturnDocument
-from psalg.configdb.typed_json import *
+from typed_json.typed_json import * 
 
 import context
 import numpy
