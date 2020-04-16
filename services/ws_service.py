@@ -12,7 +12,7 @@ from functools import wraps
 import requests
 from flask import Blueprint, jsonify, request, url_for, Response, send_file, abort
 from pymongo import ASCENDING, DESCENDING, ReturnDocument
-from typed_json.typed_json import * 
+from typed_json.typed_json import *
 
 import context
 import numpy
@@ -86,7 +86,7 @@ def svc_get_aliases(configroot, hutch):
     """
     cdb = context.configdbclient.get_database(configroot)
     hc = cdb[hutch]
-    xx = [v['_id'] for v in hc.aggregate([{"$group": 
+    xx = [v['_id'] for v in hc.aggregate([{"$group":
                                               {"_id" : "$alias"}}])]
     return ok_response(value = xx)
 
@@ -197,6 +197,8 @@ def get_key(cdb, hutch, alias=None):
             raise NameError('Failed to get key for alias/hutch:'+alias+'/'+hutch)
 
 @ws_service_blueprint.route("/<configroot>/get_key/<hutch>/", methods=["GET"])
+@context.security.authentication_required
+@context.security.authorization_required("post")
 def svc_get_key(configroot, hutch):
     """
     Return the highest key for the specified alias, or highest + 1 for all
@@ -224,6 +226,8 @@ def get_current(configroot, alias, hutch):
 
 
 @ws_service_blueprint.route("/<configroot>/add_alias/<hutch>/<alias>/", methods=["GET"])
+@context.security.authentication_required
+@context.security.authorization_required("post")
 def svc_add_alias(configroot, hutch, alias):
     """
     Create a new alias in the hutch, if it doesn't already exist.
@@ -253,6 +257,8 @@ def svc_add_alias(configroot, hutch, alias):
 
 # Create a new device_configuration if it doesn't already exist!
 @ws_service_blueprint.route("/<configroot>/add_device_config/<cfg>/", methods=["GET"])
+@context.security.authentication_required
+@context.security.authorization_required("post")
 def svc_add_device_config(configroot, cfg):
     session = None
     cdb = context.configdbclient.get_database(configroot)
@@ -270,7 +276,7 @@ def svc_add_device_config(configroot, cfg):
     return ok_response()
 
 
-# Save a device configuration and return an object ID.  Try to find it if 
+# Save a device configuration and return an object ID.  Try to find it if
 # it already exists! Value should be a typed json dictionary.
 def save_device_config(cdb, cfg, value):
     session = None
@@ -287,6 +293,8 @@ def save_device_config(cdb, cfg, value):
 
 
 @ws_service_blueprint.route("/<configroot>/modify_device/<hutch>/<alias>/", methods=["GET"])
+@context.security.authentication_required
+@context.security.authorization_required("post")
 def svc_modify_device(configroot, hutch, alias):
     """
     Modify the current configuration for a specific device, adding it if
@@ -344,6 +352,8 @@ def svc_modify_device(configroot, hutch, alias):
 
 
 @ws_service_blueprint.route("/<configroot>/create_collections/<hutch>/", methods=["GET"])
+@context.security.authentication_required
+@context.security.authorization_required("post")
 def svc_create_collections(configroot, hutch):
     """
     Create hutch.
@@ -374,7 +384,7 @@ def svc_create_collections(configroot, hutch):
 @ws_service_blueprint.route("/<configroot>/get_history/<hutch>/<alias>/<device>/", methods=["GET"])
 def svc_get_history(configroot, hutch, alias, device):
     """
-    Get the history of the device configuration for the variables 
+    Get the history of the device configuration for the variables
     in plist.  The variables are dot-separated names with the first
     component being the the device configuration name.
     """
