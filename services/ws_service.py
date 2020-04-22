@@ -24,7 +24,7 @@ ws_service_blueprint = Blueprint('ws_service_api', __name__)
 
 logger = logging.getLogger(__name__)
 
-_version = { 'major': 1, 'minor': 0, 'micro': 0 }
+_version = { 'major': 2, 'minor': 0, 'micro': 0 }
 
 # generic response
 def response(status_code, success, msg, value):
@@ -256,10 +256,11 @@ def svc_add_alias(configroot, hutch, alias):
 
 
 # Create a new device_configuration if it doesn't already exist!
-@ws_service_blueprint.route("/<configroot>/add_device_config/<cfg>/", methods=["GET"])
+# Hutch is included for authentication.
+@ws_service_blueprint.route("/<configroot>/add_device_config/<hutch>/<cfg>/", methods=["GET"])
 @context.security.authentication_required
 @context.security.authorization_required("post")
-def svc_add_device_config(configroot, cfg):
+def svc_add_device_config(configroot, hutch, cfg):
     session = None
     cdb = context.configdbclient.get_database(configroot)
     # Validate name?
