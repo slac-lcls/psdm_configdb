@@ -7,7 +7,6 @@ import logging
 import sys
 import uuid
 from datetime import datetime
-from functools import wraps
 
 import requests
 from flask import Blueprint, jsonify, request, url_for, Response, send_file, abort
@@ -198,7 +197,7 @@ def get_key(cdb, hutch, alias=None):
 
 @ws_service_blueprint.route("/<configroot>/get_key/<hutch>/", methods=["GET"])
 @context.security.authentication_required
-@context.security.authorization_required("post")
+@context.security.authorization_required("config_edit")
 def svc_get_key(configroot, hutch):
     """
     Return the highest key for the specified alias, or highest + 1 for all
@@ -227,7 +226,7 @@ def get_current(configroot, alias, hutch):
 
 @ws_service_blueprint.route("/<configroot>/add_alias/<hutch>/<alias>/", methods=["GET"])
 @context.security.authentication_required
-@context.security.authorization_required("post")
+@context.security.authorization_required("config_edit")
 def svc_add_alias(configroot, hutch, alias):
     """
     Create a new alias in the hutch, if it doesn't already exist.
@@ -259,7 +258,7 @@ def svc_add_alias(configroot, hutch, alias):
 # Hutch is included for authentication.
 @ws_service_blueprint.route("/<configroot>/add_device_config/<hutch>/<cfg>/", methods=["GET"])
 @context.security.authentication_required
-@context.security.authorization_required("post")
+@context.security.authorization_required("config_edit")
 def svc_add_device_config(configroot, hutch, cfg):
     session = None
     cdb = context.configdbclient.get_database(configroot)
@@ -295,7 +294,7 @@ def save_device_config(cdb, cfg, value):
 
 @ws_service_blueprint.route("/<configroot>/modify_device/<hutch>/<alias>/", methods=["GET"])
 @context.security.authentication_required
-@context.security.authorization_required("post")
+@context.security.authorization_required("config_edit")
 def svc_modify_device(configroot, hutch, alias):
     """
     Modify the current configuration for a specific device, adding it if
@@ -354,7 +353,7 @@ def svc_modify_device(configroot, hutch, alias):
 
 @ws_service_blueprint.route("/<configroot>/create_collections/<hutch>/", methods=["GET"])
 @context.security.authentication_required
-@context.security.authorization_required("post")
+@context.security.authorization_required("config_edit")
 def svc_create_collections(configroot, hutch):
     """
     Create hutch.
