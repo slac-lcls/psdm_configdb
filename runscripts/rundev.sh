@@ -21,5 +21,5 @@ export ACCESS_LOG_FORMAT='%(h)s %(l)s %({REMOTE_USER}i)s %(t)s "%(r)s" "%(q)s" %
 
 exec gunicorn start:app -b ${SERVER_IP_PORT} --reload \
        --log-level=DEBUG --env DEBUG=TRUE --capture-output --enable-stdio-inheritance \
-       --worker-class eventlet --workers 1 --worker-connections 2048 --max-requests 100000 --timeout 600 \
+       --worker-class eventlet --workers 8 --worker-connections 2048 --max-requests 100000 --timeout 600 \
        --access-logfile - --access-logformat "${ACCESS_LOG_FORMAT}"
