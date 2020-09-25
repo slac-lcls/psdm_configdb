@@ -18,9 +18,14 @@ app = None
 
 MONGODB_URL=os.environ.get("MONGODB_URL", None)
 configdbclient = MongoClient(host=MONGODB_URL, tz_aware=True)
+ROLEDB_URL=os.environ.get("ROLEDB_URL", None)
+roledbclient = configdbclient
+if ROLEDB_URL:
+    logger.info("Using a different database for the roles")
+    roledbclient = MongoClient(host=ROLEDB_URL, tz_aware=True)
 
 usergroups = UserGroups()
-roleslookup = MongoDBRoles(configdbclient, usergroups)
+roleslookup = MongoDBRoles(roledbclient, usergroups)
 
 class ConfigDBAuthnz(FlaskAuthnz):
     """
