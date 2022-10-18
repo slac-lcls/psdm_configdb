@@ -120,9 +120,7 @@ def svc_get_configuration(configroot, hutch, alias, device):
     cdb = context.configdbclient.get_database(configroot)
     hc = cdb[hutch]
 
-
-
-    if alas.isdecimal():
+    if alias.isdecimal():
         key = alias
     else:
         # get key from alias
