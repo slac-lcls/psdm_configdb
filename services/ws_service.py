@@ -120,15 +120,22 @@ def svc_get_configuration(configroot, hutch, alias, device):
     cdb = context.configdbclient.get_database(configroot)
     hc = cdb[hutch]
 
-    # get key from alias
-    try:
-        d = hc.find({'alias' : alias}, session=None).sort('key', DESCENDING).limit(1)[0]
-    except IndexError:
-        return error_response(msg = "get_configuration: No alias %s!" % alias)
 
-    key = d['key']
+
+    if alas.isdecimal():
+        key = alias
+    else:
+        # get key from alias
+        try:
+            d = hc.find({'alias' : alias}, session=None).sort('key', DESCENDING).limit(1)[0]
+            key = d['key']
+        except IndexError:
+            return error_response(msg = "get_configuration: No alias %s!" % alias)
 
     c = hc.find_one({"key": key})
+    if c is None:
+        return error_response(msg = "get_configuration: No key %s!" % key)
+
     cfg = None
     for l in c["devices"]:
         if l['device'] == device:
