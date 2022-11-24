@@ -27,6 +27,9 @@ if ROLEDB_URL:
 usergroups = UserGroups()
 roleslookup = MongoDBRoles(roledbclient, usergroups)
 
+instrument2operator_uids = { x["_id"].lower() : x.get("params", {}).get("operator_uid", x["_id"].lower()+"opr") for x in roledbclient["site"]["instruments"].find({}, {"_id": 1, "params.operator_uid": 1})}
+print(instrument2operator_uids)
+
 class ConfigDBAuthnz(FlaskAuthnz):
     """
     Change the way authorization works for the ConfigDB.
@@ -51,7 +54,7 @@ class ConfigDBAuthnz(FlaskAuthnz):
             def wrapped(*args, **kwargs):
                 hutch_name = kwargs.get('hutch', None)
                 logger.info("Looking to authorize %s for app %s for privilege %s for hutch %s" % (self.get_current_user_id(), self.application_name, priv_name, hutch_name))
-                if self.get_current_user_id() == hutch_name.lower() + "opr":
+                if self.get_current_user_id() == instrument2operator_uids.get(hutch_name.lower(), hutch_name.lower() + "opr"):
                     logger.debug("Letting the hutch operator for hutch %s thru %s", hutch_name, self.get_current_user_id())
                     return f(*args, **kwargs)
                 if not self.check_privilege_for_experiment(priv_name, "", hutch_name):
