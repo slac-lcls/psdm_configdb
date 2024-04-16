@@ -419,3 +419,112 @@ def svc_get_history(configroot, hutch, alias, device):
         l.append(d)
 
     return ok_response(value = l)
+
+@ws_service_blueprint.route("/<configroot>/rename_device/<hutch>/<alias>/<device>/", methods=["GET"])
+@context.security.authentication_required
+@context.security.authorization_required("config_edit")
+def svc_rename_device(configroot, hutch, alias, device):
+    """
+    Rename the specified device.
+    Pass in the new name as the query parameter newname
+    We clone the softlinked document and update the detName:RO
+    We then make a copy of the current config document with a new key and update device name and _id to point to the cloned document in the previous step
+    """
+    newname = request.args.get("newname", None)
+    if not newname:
+        return error_response(msg = "Please specify the new name as query parameter newname")
+    
+    logger.debug("svc_rename_device: hutch=%s, alias=%s, device=%s newname=%s" % (hutch, alias, device, newname))
+
+    cdb = context.configdbclient.get_database(configroot)
+    hc = cdb[hutch]
+
+    try:
+        c = get_current(configroot, alias, hutch)
+    except Exception as ex:
+        return error_response(msg = "%s" % ex)
+
+    if c is None:
+        return error_response(msg = "%s is not a configuration name!" % alias)
+
+    if hc.count_documents({"alias": alias, "key": c["key"], "devices.device": device}) <= 0:
+        return error_response(msg = "The current configuration for hutch=%s, alias=%s already does not have a device named %s" % (hutch, alias, device))
+
+    if hc.count_documents({"alias": alias, "key": c["key"], "devices.device": newname}) > 0:
+        return error_response(msg = "The current configuration for hutch=%s, alias=%s already has a device named %s" % (hutch, alias, newname))
+    
+    # Follow the soft link to clone the existing document and change the detName:RO
+    cfg = next(x for x in c["devices"] if x["device"] == device)
+    thelink = cfg["configs"][0]
+    cname = thelink['collection']
+    r = cdb[cname].find_one({"_id" : thelink['_id']})
+    if r is None:
+        return error_response(msg = "The current device config %s in the collection %s does not point to a valid document" % (thelink['_id'], cname))
+    
+    r["config"]["detName:RO"] = newname
+    del r["_id"]
+    newdocid = cdb[cname].insert_one(r).inserted_id
+    logger.info("svc_rename_device: hutch=%s, alias=%s, device=%s newname=%s Newly inserted doc with new detName:RO %s" % (hutch, alias, device, newname, newdocid))
+    # Copy the current key and change the name and softlink id
+    session = None
+    cfg["device"] = newname
+    thelink["_id"] = newdocid
+
+    d = cdb.counters.find_one_and_update({'hutch': hutch},
+                                         {'$inc': {'seq': 1}},
+                                         session=session,
+                                         return_document=ReturnDocument.AFTER)
+    kn = d['seq']
+    newcdocid = hc.insert_one({
+        "date": datetime.utcnow(),
+        "alias": alias, 
+        "key": kn,
+        "devices": c["devices"]},
+        session=session,
+        ).inserted_id
+    logger.info("svc_rename_device: hutch=%s, alias=%s, device=%s newname=%s Newly inserted config doc %s" % (hutch, alias, device, newname, newcdocid))
+
+    return ok_response(value = True)
+
+@ws_service_blueprint.route("/<configroot>/remove_device/<hutch>/<alias>/<device>/", methods=["GET"])
+@context.security.authentication_required
+@context.security.authorization_required("config_edit")
+def svc_remove_device(configroot, hutch, alias, device):
+    """
+    Remove the specified device from the current configuration.
+    We make a copy of the current config document with a new key remove the device from the devices.
+    """
+    logger.debug("svc_remove_device: hutch=%s, alias=%s, device=%s" % (hutch, alias, device))
+
+    cdb = context.configdbclient.get_database(configroot)
+    hc = cdb[hutch]
+
+    try:
+        c = get_current(configroot, alias, hutch)
+    except Exception as ex:
+        return error_response(msg = "%s" % ex)
+
+    if c is None:
+        return error_response(msg = "%s is not a configuration name!" % alias)
+
+    if hc.count_documents({"alias": alias, "key": c["key"], "devices.device": device}) <= 0:
+        return error_response(msg = "The current configuration for hutch=%s, alias=%s already does not have a device named %s" % (hutch, alias, device))
+
+
+    modifieddevices = list(filter(lambda x : x["device"] != device, c["devices"]))
+    session = None
+    d = cdb.counters.find_one_and_update({'hutch': hutch},
+                                         {'$inc': {'seq': 1}},
+                                         session=session,
+                                         return_document=ReturnDocument.AFTER)
+    kn = d['seq']
+    newcdocid = hc.insert_one({
+        "date": datetime.utcnow(),
+        "alias": alias, 
+        "key": kn,
+        "devices": modifieddevices},
+        session=session,
+        ).inserted_id
+    logger.info("svc_remove_device: hutch=%s, alias=%s, device=%s Newly inserted config doc %s" % (hutch, alias, device, newcdocid))
+
+    return ok_response(value = True)
