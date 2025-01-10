@@ -1,0 +1,37 @@
+namespace: dev
+
+configMapGenerator:
+- name: configdbconfigs
+  literals:
+  - LOG_LEVEL=INFO
+  - CONFIGDB_URL_TMPL='mongodb://${CONFIGDB_USER}:${CONFIGDB_PWD}@${CONFIGDB_HOSTS}/?authSource=admin'
+  - CONFIGDB_HOSTS_FILE="/work/secrets/configdb_hosts"
+  - CONFIGDB_USER_FILE="/work/secrets/configdb_username"
+  - CONFIGDB_PWD_FILE="/work/secrets/configdb_password"
+  - ROLEDB_URL_TMPL='mongodb://${ROLEDB_USER}:${ROLEDB_PWD}@${ROLEDB_HOSTS}/?authSource=admin'
+  - ROLEDB_HOSTS_FILE="/work/secrets/roledb_hosts"
+  - ROLEDB_USER_FILE="/work/secrets/roledb_username"
+  - ROLEDB_PWD_FILE="/work/secrets/roledb_password"
+  - FLASK_AUTHNZ_USER_HEADER="REMOTE-USER"
+
+generatorOptions:
+  disableNameSuffixHash: true
+
+bases:
+- ../../base
+
+images:
+- name: psdm_configdb
+  newName: cr.stanford.edu/psdm/psdm_k8s_images/slaclab/psdm_configdb
+  newTag: 0.0.1
+
+secretGenerator:
+- name: configdb-secrets
+  files:
+  - etc/.secrets/configdb_hosts
+  - etc/.secrets/configdb_username
+  - etc/.secrets/configdb_password
+  - etc/.secrets/roledb_hosts
+  - etc/.secrets/roledb_username
+  - etc/.secrets/roledb_password
+

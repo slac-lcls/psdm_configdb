@@ -1,6 +1,8 @@
 import os
 import json
 import logging
+import urllib
+import string
 from functools import wraps
 from flask import abort
 
@@ -16,12 +18,32 @@ __author__ = 'mshankar@slac.stanford.edu'
 # Application context.
 app = None
 
-MONGODB_URL=os.environ.get("MONGODB_URL", None)
-configdbclient = MongoClient(host=MONGODB_URL, tz_aware=True)
-ROLEDB_URL=os.environ.get("ROLEDB_URL", None)
+def __read_from_file__(envname, varname, theenv):
+    if envname in os.environ and os.path.exists(os.environ[envname]):
+        with open(os.environ[envname], "r") as f:
+            theenv[varname] = urllib.parse.quote(f.read().strip())
+    else:
+        raise Exception(f"File for {varname} not found")
+
+configdbenv = {}
+__read_from_file__("CONFIGDB_USER_FILE", "CONFIGDB_USER", configdbenv)
+__read_from_file__("CONFIGDB_PWD_FILE",  "CONFIGDB_PWD",  configdbenv)
+__read_from_file__("CONFIGDB_HOSTS_FILE",  "CONFIGDB_HOSTS",  configdbenv)
+
+CONFIGDB_URL_TMPL = string.Template(os.environ["CONFIGDB_URL_TMPL"])
+CONFIGDB_URL = CONFIGDB_URL_TMPL.substitute(configdbenv)
+configdbclient = MongoClient(host=CONFIGDB_URL, tz_aware=True)
+
 roledbclient = configdbclient
-if ROLEDB_URL:
+ROLEDB_URL_TMPL = os.environ.get("ROLEDB_URL_TMPL", None)
+if ROLEDB_URL_TMPL:
     logger.info("Using a different database for the roles")
+    ROLEDB_URL_TMPL = string.Template(ROLEDB_URL_TMPL)
+    roledbenv = {}
+    __read_from_file__("ROLEDB_USER_FILE", "ROLEDB_USER", roledbenv)
+    __read_from_file__("ROLEDB_PWD_FILE",  "ROLEDB_PWD",  roledbenv)
+    __read_from_file__("ROLEDB_HOSTS_FILE",  "ROLEDB_HOSTS",  roledbenv)
+    ROLEDB_URL = ROLEDB_URL_TMPL.substitute(roledbenv)
     roledbclient = MongoClient(host=ROLEDB_URL, tz_aware=True)
 
 usergroups = UserGroups()

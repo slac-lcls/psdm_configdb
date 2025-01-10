@@ -1,0 +1,46 @@
+---
+ kind: Deployment
+ apiVersion: apps/v1
+ metadata:
+   name: configdb
+   labels:
+     app: configdb
+ spec:
+   selector:
+     matchLabels:
+       app: configdb
+   template:
+     metadata:
+       labels:
+         app: configdb
+     spec:
+      containers:
+      - name: configdb
+        image: psdm_configdb:latest
+        imagePullPolicy: Always
+        envFrom:
+        - configMapRef:
+            name: configdbconfigs
+        volumeMounts:
+        - name: configdb-secrets
+          mountPath: /work/secrets
+          readOnly: true
+      volumes:
+      - name: configdb-secrets
+        secret:
+          secretName: configdb-secrets
+          defaultMode: 0400
+      imagePullSecrets:
+      - name: crcred
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: configdbsvc
+spec:
+  selector:
+    app: configdb
+  ports:
+    - name: http
+      protocol: TCP
+      port: 5000

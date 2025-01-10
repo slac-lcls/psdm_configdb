@@ -11,7 +11,8 @@ from datetime import datetime
 import requests
 from flask import Blueprint, jsonify, request, url_for, Response, send_file, abort
 from pymongo import ASCENDING, DESCENDING, ReturnDocument
-from typed_json.typed_json import *
+
+from typed_json.typed_json import cdict
 
 import context
 import numpy
@@ -527,4 +528,17 @@ def svc_remove_device(configroot, hutch, alias, device):
         ).inserted_id
     logger.info("svc_remove_device: hutch=%s, alias=%s, device=%s Newly inserted config doc %s" % (hutch, alias, device, newcdocid))
 
+    return ok_response(value = True)
+
+
+@ws_service_blueprint.route("/<configroot>/test_edit_privilege/<hutch>/test", methods=["GET"])
+@context.security.authentication_required
+@context.security.authorization_required("config_edit")
+def svc_test_edit_privilege(configroot, hutch):
+    return ok_response(value = True)
+
+
+@ws_service_blueprint.route("/print_headers", methods=["GET"])
+def svc_print_headers():
+    print(request.headers)
     return ok_response(value = True)

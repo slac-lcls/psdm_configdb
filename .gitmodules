@@ -1,0 +1,3 @@
+[submodule "src/modules/flask_authnz"]
+	path = src/modules/flask_authnz
+	url = https://github.com/slaclab/flask_authnz.git
