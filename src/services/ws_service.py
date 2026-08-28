@@ -9,8 +9,10 @@ import uuid
 from datetime import datetime
 
 import requests
+from bson.objectid import ObjectId
 from flask import Blueprint, jsonify, request, url_for, Response, send_file, abort
 from pymongo import ASCENDING, DESCENDING, ReturnDocument
+from pymongo.errors import WriteError
 
 from typed_json.typed_json import cdict
 
@@ -542,3 +544,391 @@ def svc_test_edit_privilege(configroot, hutch):
 def svc_print_headers():
     print(request.headers)
     return ok_response(value = True)
+
+# --- Endpoints below are for interfacing with DRP algorithm configuration --- #
+
+
+@ws_service_blueprint.route("/<configroot>/get_algorithms/", methods=["GET"])
+def svc_get_algorithms(configroot):
+    """
+    Return a list of registered algorithms and their versions.
+
+    The collection `alg_registry` has the registry of documents in this format:
+        { "name": "MyAlgName", "versions": ["v1", "v2"] }
+
+    Args:
+        configroot: Database name
+    """
+    cdb = context.configdbclient.get_database(configroot)
+
+    algs = list(cdb.alg_registry.find({}, {"_id": 0}))
+
+    return ok_response(value=algs)
+
+@ws_service_blueprint.route("/<configroot>/get_algorithm/<alg>/<ver>/schema/", methods=["GET"])
+def svc_get_algorithm_schema(configroot, alg, ver):
+    """
+    Return the parameter schema for a specific version of an algorithm.
+
+    Args:
+        configroot: Database name
+
+        alg: Name of the DRP algorithm
+
+        ver: Version of the DRP algorithm
+    """
+    cdb = context.configdbclient.get_database(configroot)
+
+    try:
+        coll_name: str = f"drp_alg_{alg}_{ver}"
+
+        schema_doc = cdb[coll_name].find_one({"_id": "_schema"})
+        if not schema_doc:
+            return error_response(
+                msg=f"Requested algorithm ({alg}) version {ver} does not have a schema!",
+                status_code=404,
+            )
+
+        return ok_response(value=schema_doc.get("json_schema", {}))
+    except Exception:
+        return error_response(
+            msg=f"Requested algorithm ({alg}) version {ver} does not exist!",
+            status_code=404,
+        )
+
+@ws_service_blueprint.route("/<configroot>/get_algorithm/<alg>/<ver>/presets/", methods=["GET"])
+def svc_get_algorithm_presets(configroot, alg, ver):
+    """
+    Return the set of presets parameter sets for the requested algorithm version.
+
+    Args:
+        configroot: Database name
+
+        alg: Name of the DRP algorithm
+
+        ver: Version of the DRP algorithm
+    """
+    cdb = context.configdbclient.get_database(configroot)
+
+    try:
+        coll_name: str = f"drp_alg_{alg}_{ver}"
+
+        presets = list(
+            cdb[coll_name].find(
+                {"$and": [{"preset_name": {"$ne": ""}}, {"_id": {"$ne": "_schema"}}]}
+            )
+        )
+        if not presets:
+            return error_response(
+                msg=f"Requested algorithm ({alg}) version {ver} does not presets!",
+                status_code=404,
+            )
+
+        for preset in presets:
+            # The ObjectId field is not JSON serializable
+            preset["_id"] = str(preset["_id"])
+
+        return ok_response(value=presets)
+    except Exception:
+        return error_response(
+            msg=f"Requested algorithm ({alg}) version {ver} does not exist!",
+            status_code=404,
+        )
+
+@ws_service_blueprint.route("/<configroot>/get_algorithm/<alg>/<ver>/params/", methods=["GET"])
+def svc_get_algorithm_params(configroot, alg, ver):
+    """
+    Return a specific parameter set for the requested algorithm version.
+
+    This endpoint can return 2 payload types depending on request configuration:
+        1. No ID or presets requested -> Latest parameters uploaded.
+        2. A specific parameter set by ID - This is included in `params_id` in
+           the payload.
+
+    Args:
+        configroot: Database name
+
+        alg: Name of the DRP algorithm
+
+        ver: Version of the DRP algorithm
+    """
+    # This endpoint allows passing argument to retrieve ID
+    # OR, no argument for latest doc. Hence choice of kwargs here
+    req_args = request.get_json(silent=True, force=True) or {}
+
+    params_id = req_args.get("params_id")
+
+    cdb = context.configdbclient.get_database(configroot)
+
+    try:
+        coll_name: str = f"drp_alg_{alg}_{ver}"
+        if params_id is not None:
+            params = cdb[coll_name].find_one({"_id": ObjectId(params_id)})
+        else:
+            params = (
+                cdb[coll_name]
+                .find({"_id": {"$ne": "_schema"}})
+                .sort("created_at", DESCENDING)
+                .limit(1)[0]
+            )
+
+            print(params)
+
+        if not params:
+            if params_id is not None:
+                return error_response(
+                    msg=f"Unable to find requested parameters! (Id: {params_id})",
+                    status_code=404,
+                )
+            else:
+                return error_response(
+                    msg="Unable to find latest parameters! Maybe no sets registered?",
+                    status_code=404,
+                )
+
+        # Sanitize the ObjectId
+        params["_id"] = str(params["_id"])
+
+        return ok_response(value=params)
+    except Exception as err:
+        return error_response(
+            msg=f"Unable to find requested parameters! Error: {err}", status_code=404
+        )
+
+def make_schema_mongo_compatible(alg_ver_schema):
+    """
+    The mongoDB JSON schema requires some modifications vs a standard schema.
+    This function converts an algorithm schema into the MongoDB format to be
+    used at the database layer for validation. The original schema can also
+    be stored unmodified.
+
+    Args:
+        alg_ver_schema (dict[str, Any]): The parameter schema in normal JSON
+            schema format -- generally coming from DAQ code via request.
+
+    Returns:
+        converted (dict[str, Any]): The schema with any modifications required
+            for use as a mongoDB validator.
+    """
+    converted_schema = {}
+    for key, value in alg_ver_schema.items():
+        if isinstance(value, dict):
+            updated_value = make_schema_mongo_compatible(value)
+        else:
+            updated_value = value
+        if key == "type":
+            converted_schema["bsonType"] = updated_value
+        else:
+            converted_schema[key] = updated_value
+
+    return converted_schema
+
+
+def construct_alg_db_schema(alg_ver_schema):
+    """
+    Construct a schema that validates entries in an algorithm version collection.
+
+    The version of the algorithm should come with a schema to validate its own
+    parameter sets. The collection that holds these, though, is slightly broader
+    and includes additional keys that the backend uses. This function therefore updates
+    the algorithm schema it receives with the appropriate keys for the rest of
+    the keys.
+
+    Args:
+        alg_ver_schema (dict[str, Any]): The parameter schema in normal JSON
+            schema format -- generally coming from DAQ code via request.
+
+    Returns:
+        converted (dict[str, Any]): The combined schema for the parameters of the
+            algorithm and the schema document itself.
+    """
+    schema_for_schema_doc = {
+        "bsonType": "object",
+        "properties": {
+            "_id": {"enum": ["_schema"]},
+            "schema_version": {"bsonType": "string"},
+            "json_schema": {"bsonType": "object"},
+        },
+        "required": ["_id", "schema_version", "json_schema"],
+    }
+
+    schema_for_params_doc = {
+        "bsonType": "object",
+        "properties": {
+            "preset_name": {"bsonType": "string"},
+            "created_by": {"bsonType": "string"},
+            "created_at": {"bsonType": "date"},
+            "parameters": make_schema_mongo_compatible(alg_ver_schema),
+        },
+        "required": ["created_at", "parameters"],
+    }
+
+    # In a versioned algorithm collection we either have:
+    # A schema document itself:
+    #
+    # { "_id": "_schema", "schema_version": "v1", "json_schema": { ... }, }
+    #
+    # OR, each actual parameter set (which conforms to the above)
+    #
+    # { "preset_name": "", "created_by": "", created_at": "", "parameters": { ... }, }
+
+    full_schema = {
+        "$jsonSchema": {
+            "oneOf": [schema_for_schema_doc, schema_for_params_doc],
+        },
+    }
+
+    return full_schema
+
+@ws_service_blueprint.route("/<configroot>/new_algorithm/<alg>/<ver>/", methods=["POST"])
+@context.security.authentication_required
+@context.security.authorization_required("config_edit")
+def svc_add_new_algorithm(configroot, alg, ver):
+    """
+    Add a new algorithm for the first time.
+
+    Args:
+        configroot: Database name
+
+        alg: Name of the DRP algorithm
+
+        ver: Version of the DRP algorithm
+    """
+    req_args = request.get_json(silent=False) or {}
+    preset_name = req_args.get("preset_name", "Default")
+    defaults = req_args.get("defaults", {})
+    schema = req_args.get("schema", {})
+
+    opr = req_args.get("opr", "tstopr")
+
+    if not schema:
+        return error_response(msg="Schema is required for all algorithms!")
+
+    cdb = context.configdbclient.get_database(configroot)
+
+    coll_name: str = f"drp_alg_{alg}_{ver}"
+    try:
+        cdb.create_collection(
+            coll_name,
+            validator=construct_alg_db_schema(alg_ver_schema=schema),
+            validationAction="error",
+        )
+    except Exception as err:
+        return error_response(msg=f"Unable to create algorithm collection: {err}")
+
+    cdb[coll_name].update_one(
+        {"_id": "_schema"},
+        {"$set": {"schema_version": ver, "json_schema": schema}},
+        upsert=True,
+    )
+
+    defaults_id = None
+    if defaults:
+        res = cdb[coll_name].insert_one(
+            {
+                "preset_name": preset_name,
+                "created_by": opr,
+                # Expected as a date object, not string.
+                "created_at": datetime.utcnow(),
+                "parameters": defaults,
+            }
+        )
+        defaults_id = str(res.inserted_id)
+
+    cdb.alg_registry.update_one(
+        {"name": alg},
+        {"$addToSet": {"versions": ver}},
+        upsert=True,
+    )
+
+    return ok_response(value={"collection": coll_name, "params_id": defaults_id})
+
+@ws_service_blueprint.route("/<configroot>/add_algorithm_params/<alg>/<ver>/", methods=["POST"])
+@context.security.authentication_required
+@context.security.authorization_required("config_edit")
+def svc_add_algorithm_params(configroot, alg, ver):
+    """
+    Add a new parameter set for a version of an algorithm.
+
+    Args:
+        configroot: Database name
+
+        alg: Name of the DRP algorithm
+
+        ver: Version of the DRP algorithm
+    """
+    req_args = request.get_json(silent=False) or {}
+    preset_name = req_args.get("preset_name", "")
+    params = req_args.get("parameters", {})
+
+    opr = req_args.get("opr", "tstopr")
+
+    if not params:
+        return error_response(msg="Must include parameters in document!")
+
+    cdb = context.configdbclient.get_database(configroot)
+
+    coll_name = f"drp_alg_{alg}_{ver}"
+
+    doc = {
+        "preset_name": preset_name,
+        "created_by": opr,
+        # Expected as a date object, not string.
+        "created_at": datetime.utcnow(),
+        "parameters": params,
+    }
+    try:
+        res = cdb[coll_name].insert_one(doc)
+        params_id = str(res.inserted_id)
+
+        return ok_response(value={"collection": coll_name, "params_id": params_id})
+    except WriteError as err:
+        details = getattr(err, "details", {})
+        info = details.get("errInfo", {}).get("details", {})
+
+        logger.error(f"Parameter validation failed: {info}")
+        return error_response(
+            msg=f"Parameter document failed validation! Details: {info}",
+            status_code=400,
+        )
+    except Exception as err:
+        return error_response(
+            msg=f"Failed to insert document for unknown reason: {err}",
+            status_code=500,
+        )
+
+@ws_service_blueprint.route("/<configroot>/remove_algorithm/<alg>/<ver>/", methods=["POST", "DELETE"])
+@context.security.authentication_required
+@context.security.authorization_required("config_edit")
+def svc_remove_algorithm(configroot, alg, ver):
+    """
+    Remove a specific version of an algorithm, or pass ver='all' to delete all versions.
+
+    Args:
+        configroot: Database name
+
+        alg: Name of the DRP algorithm
+
+        ver: Version of the DRP algorithm. If `all` will drop every algorithm version.
+    """
+    cdb = context.configdbclient.get_database(configroot)
+
+    if ver == "all":
+        alg_doc = cdb.alg_registry.find_one({"name": alg})
+        if alg_doc and "versions" in alg_doc:
+            for v in alg_doc["versions"]:
+                cdb.drop_collection(f"drp_alg_{alg}_{v}")
+
+        cdb.alg_registry.delete_one({"name": alg})
+        return ok_response(value=f"Removed algorithm '{alg}' and all versions.")
+
+    # To drop single version, remove the collection and then pull from registry
+    coll_name = f"drp_alg_{alg}_{ver}"
+    cdb.drop_collection(coll_name)
+
+    cdb.alg_registry.update_one({"name": alg}, {"$pull": {"versions": ver}})
+
+    # If versions now empty, remove the entire algorithm from the registry
+    cdb.alg_registry.delete_one({"name": alg, "versions": []})
+
+    return ok_response(value=f"Removed version '{ver}' of algorithm '{alg}'.")
