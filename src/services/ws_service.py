@@ -547,6 +547,30 @@ def svc_print_headers():
 
 # --- Endpoints below are for interfacing with DRP algorithm configuration --- #
 
+def uint64_to_int64(val):
+    """Convert unsigned 64-bit int (or list/tuple/dict) to signed 2's complement."""
+    if isinstance(val, int) and not isinstance(val, bool):
+        return val - (1 << 64) if val >= (1 << 63) else val
+    elif isinstance(val, list):
+        return [uint64_to_int64(v) for v in val]
+    elif isinstance(val, tuple):
+        return tuple(uint64_to_int64(v) for v in val)
+    elif isinstance(val, dict):
+        return {k: uint64_to_int64(v) for k, v in val.items()}
+    return val
+
+
+def int64_to_uint64(val):
+    """Convert signed 2's complement int (or list/tuple/dict) back to unsigned 64-bit int."""
+    if isinstance(val, int) and not isinstance(val, bool):
+        return val + (1 << 64) if val < 0 else val
+    elif isinstance(val, list):
+        return [int64_to_uint64(v) for v in val]
+    elif isinstance(val, tuple):
+        return tuple(int64_to_uint64(v) for v in val)
+    elif isinstance(val, dict):
+        return {k: int64_to_uint64(v) for k, v in val.items()}
+    return val
 
 @ws_service_blueprint.route("/<configroot>/get_algorithms/", methods=["GET"])
 def svc_get_algorithms(configroot):
@@ -620,11 +644,13 @@ def svc_get_algorithm_presets(configroot, alg, ver):
         )
         if not presets:
             return error_response(
-                msg=f"Requested algorithm ({alg}) version {ver} does not presets!",
+                msg=f"Requested algorithm ({alg}) version {ver} does not have presets!",
                 status_code=404,
             )
 
         for preset in presets:
+            if "parameters" in preset:
+                preset["parameters"] = int64_to_uint64(preset["parameters"])
             # The ObjectId field is not JSON serializable
             preset["_id"] = str(preset["_id"])
 
@@ -672,8 +698,6 @@ def svc_get_algorithm_params(configroot, alg, ver):
                 .limit(1)[0]
             )
 
-            print(params)
-
         if not params:
             if params_id is not None:
                 return error_response(
@@ -686,6 +710,9 @@ def svc_get_algorithm_params(configroot, alg, ver):
                     status_code=404,
                 )
 
+        if "parameters" in params:
+            params["parameters"] = int64_to_uint64(params["parameters"])
+
         # Sanitize the ObjectId
         params["_id"] = str(params["_id"])
 
@@ -694,6 +721,29 @@ def svc_get_algorithm_params(configroot, alg, ver):
         return error_response(
             msg=f"Unable to find requested parameters! Error: {err}", status_code=404
         )
+
+@ws_service_blueprint.route("/<configroot>/get_algorithm/<alg>/<ver>/metadata/", methods=["GET"])
+def svc_get_algorithm_metadata(configroot, alg, ver):
+    """
+    Retrieve any metadata stored as associated to an algorithm.
+
+    This may include GUI plugins, e.g., that are used to help configure the algorithm.
+
+    Args:
+        configroot: Database name
+
+        alg: Name of the DRP algorithm
+
+        ver: Version of the DRP algorithm
+    """
+    cdb = context.configdbclient.get_database(configroot)
+    coll_name = f"drp_alg_{alg}_{ver}"
+    doc = cdb[coll_name].find_one({"_id": "_schema"}, {"_id": 0})
+
+    if not doc:
+        return error_response(msg=f"Metadata for {alg} {ver} not found!", status_code=404)
+
+    return ok_response(value=doc)
 
 def make_schema_mongo_compatible(alg_ver_schema):
     """
@@ -710,19 +760,62 @@ def make_schema_mongo_compatible(alg_ver_schema):
         converted (dict[str, Any]): The schema with any modifications required
             for use as a mongoDB validator.
     """
-    converted_schema = {}
-    for key, value in alg_ver_schema.items():
-        if isinstance(value, dict):
-            updated_value = make_schema_mongo_compatible(value)
-        else:
-            updated_value = value
-        if key == "type":
-            converted_schema["bsonType"] = updated_value
-        else:
-            converted_schema[key] = updated_value
+    BSON_TYPE_MAP = {
+        "UINT8": "int",
+        "UINT16": "int",
+        "UINT32": ["int", "long"],
+        "UINT64": ["int", "long"],
+        "INT8": "int",
+        "INT16": "int",
+        "INT32": "int",
+        "INT64": ["int", "long"],
+        "FLOAT": "double",
+        "DOUBLE": "double",
+        "CHARSTR": "string",
+        "string": "string",
+        "number": "double",
+        "integer": ["int", "long"],
+        "BOOL": "bool",
+        "boolEnum": "bool",
+        "boolean": "bool",
+        "array": "array",
+        "object": "object",
+    }
 
-    return converted_schema
+    def convert_spec(spec):
+        if not isinstance(spec, dict):
+            return spec
 
+        converted = {}
+        for key, value in spec.items():
+            if key == "type":
+                converted["bsonType"] = BSON_TYPE_MAP.get(value, value)
+            elif key == "$ref":
+                underlying_type = value.rstrip("/").rsplit("/", 1)[-1]
+                converted["bsonType"] = BSON_TYPE_MAP.get(underlying_type, underlying_type)
+            elif key == "items" and isinstance(value, dict):
+                converted["items"] = convert_spec(value)
+            else:
+                converted[key] = value
+
+        return converted
+
+    properties = alg_ver_schema.get("properties", alg_ver_schema)
+    converted_properties = {
+        prop_name: convert_spec(prop_spec)
+        for prop_name, prop_spec in properties.items()
+    }
+
+    ret = {
+        "bsonType": "object",
+        "properties": converted_properties,
+    }
+
+    req = alg_ver_schema.get("required", [])
+    if req:
+        ret["required"] = req
+
+    return ret
 
 def construct_alg_db_schema(alg_ver_schema):
     """
@@ -747,6 +840,15 @@ def construct_alg_db_schema(alg_ver_schema):
         "properties": {
             "_id": {"enum": ["_schema"]},
             "schema_version": {"bsonType": "string"},
+            "gui_plugin": {
+                "type": "object",
+                "properties": {
+                    "plugin_type": { "type": "string" },
+                    "module": { "type": "string" },
+                    "entry_point": { "type": "string" },
+                    "label": { "type": "string" },
+                },
+            },
             "json_schema": {"bsonType": "object"},
         },
         "required": ["_id", "schema_version", "json_schema"],
@@ -758,6 +860,7 @@ def construct_alg_db_schema(alg_ver_schema):
             "preset_name": {"bsonType": "string"},
             "created_by": {"bsonType": "string"},
             "created_at": {"bsonType": "date"},
+            "soname": {"bsonType": "string"},
             "parameters": make_schema_mongo_compatible(alg_ver_schema),
         },
         "required": ["created_at", "parameters"],
@@ -796,10 +899,20 @@ def svc_add_new_algorithm(configroot, alg, ver):
     """
     req_args = request.get_json(silent=False) or {}
     preset_name = req_args.get("preset_name", "Default")
+    schema_version = req_args.get("schema_version", "1.0.0")
+    gui_plugin = req_args.get("gui_plugin", None)
     defaults = req_args.get("defaults", {})
     schema = req_args.get("schema", {})
-
     opr = req_args.get("opr", "tstopr")
+    soname = req_args.get("soname", "")
+
+    set_dict = {
+        "schema_version": schema_version,
+        "soname": soname,
+        "json_schema": schema,
+    }
+    if gui_plugin:
+        set_dict["gui_plugin"] = gui_plugin
 
     if not schema:
         return error_response(msg="Schema is required for all algorithms!")
@@ -807,6 +920,14 @@ def svc_add_new_algorithm(configroot, alg, ver):
     cdb = context.configdbclient.get_database(configroot)
 
     coll_name: str = f"drp_alg_{alg}_{ver}"
+
+    existing_reg = cdb.alg_registry.find_one({"name": alg, "versions": ver})
+    if existing_reg or coll_name in cdb.list_collection_names():
+        return error_response(
+            msg=f"Algorithm '{alg}' version '{ver}' is already registered! Algorithm versions are immutable.",
+            status_code=400,
+        )
+
     try:
         cdb.create_collection(
             coll_name,
@@ -816,30 +937,62 @@ def svc_add_new_algorithm(configroot, alg, ver):
     except Exception as err:
         return error_response(msg=f"Unable to create algorithm collection: {err}")
 
-    cdb[coll_name].update_one(
-        {"_id": "_schema"},
-        {"$set": {"schema_version": ver, "json_schema": schema}},
-        upsert=True,
-    )
+    try:
+        cdb[coll_name].update_one(
+            {"_id": "_schema"},
+            {"$set": set_dict},
+            upsert=True,
+        )
+    except Exception as err:
+        try:
+            cdb.drop_collection(coll_name)
+        except Exception:
+            pass
+
+        msg = f"Failed to register algorithm due to failure in schema insert: {err}"
+        logger.error(msg)
+        return error_response(msg=msg, status_code=400)
 
     defaults_id = None
     if defaults:
-        res = cdb[coll_name].insert_one(
-            {
-                "preset_name": preset_name,
-                "created_by": opr,
-                # Expected as a date object, not string.
-                "created_at": datetime.utcnow(),
-                "parameters": defaults,
-            }
-        )
-        defaults_id = str(res.inserted_id)
+        try:
+            defaults_converted = uint64_to_int64(defaults)
+            res = cdb[coll_name].insert_one(
+                {
+                    "preset_name": preset_name,
+                    "created_by": opr,
+                    # Expected as a date object, not string.
+                    "created_at": datetime.utcnow(),
+                    "soname": soname,
+                    "parameters": defaults_converted,
+                }
+            )
+            defaults_id = str(res.inserted_id)
+        except Exception as err:
+            try:
+                cdb.drop_collection(coll_name)
+            except Exception:
+                pass
 
-    cdb.alg_registry.update_one(
-        {"name": alg},
-        {"$addToSet": {"versions": ver}},
-        upsert=True,
-    )
+            msg = f"Failed to register defaults: {err}. Registration rolled back!"
+            logger.error(msg)
+            return error_response(msg=msg, status_code=400)
+
+    try:
+        cdb.alg_registry.update_one(
+            {"name": alg},
+            {"$addToSet": {"versions": ver}},
+            upsert=True,
+        )
+    except Exception as err:
+        try:
+            cdb.drop_collection(coll_name)
+        except Exception:
+            pass
+
+        msg = f"Could not make alg_registry entry: {err}. Registration rolled back!"
+        logger.error(msg)
+        return error_response(msg=msg, status_code=400)
 
     return ok_response(value={"collection": coll_name, "params_id": defaults_id})
 
@@ -860,6 +1013,7 @@ def svc_add_algorithm_params(configroot, alg, ver):
     req_args = request.get_json(silent=False) or {}
     preset_name = req_args.get("preset_name", "")
     params = req_args.get("parameters", {})
+    soname = req_args.get("soname")
 
     opr = req_args.get("opr", "tstopr")
 
@@ -870,12 +1024,18 @@ def svc_add_algorithm_params(configroot, alg, ver):
 
     coll_name = f"drp_alg_{alg}_{ver}"
 
+    if not soname:
+        schema_doc = cdb[coll_name].find_one({"_id": "_schema"}) or {}
+        soname = schema_doc.get("soname", "")
+
+    params_converted = uint64_to_int64(params)
     doc = {
         "preset_name": preset_name,
         "created_by": opr,
         # Expected as a date object, not string.
         "created_at": datetime.utcnow(),
-        "parameters": params,
+        "soname": soname,
+        "parameters": params_converted,
     }
     try:
         res = cdb[coll_name].insert_one(doc)
@@ -896,6 +1056,39 @@ def svc_add_algorithm_params(configroot, alg, ver):
             msg=f"Failed to insert document for unknown reason: {err}",
             status_code=500,
         )
+
+@ws_service_blueprint.route("/<configroot>/update_algorithm_metadata/<alg>/<ver>/", methods=["POST"])
+@context.security.authentication_required
+@context.security.authorization_required("config_edit")
+def svc_update_algorithm_metadata(configroot, alg, ver):
+    """
+    Update the metadata for an algorithm without changing the underlying parameters.
+
+    Metadata includes information such as any GUI plugins associated to the algorithm
+    which should be loaded to help configure them.
+    """
+    req_args = request.get_json(silent=False) or {}
+
+    cdb = context.configdbclient.get_database(configroot)
+    coll_name = f"drp_alg_{alg}_{ver}"
+
+    # Build update payload
+    update_fields = {}
+    if "gui_plugin" in req_args:
+        update_fields["gui_plugin"] = req_args["gui_plugin"]
+    if "schema_version" in req_args:
+        update_fields["schema_version"] = req_args["schema_version"]
+
+    if not update_fields:
+        return error_response(msg="No metadata fields provided to update!")
+
+    cdb[coll_name].update_one(
+        {"_id": "_schema"},
+        {"$set": update_fields},
+        upsert=True
+    )
+
+    return ok_response(value=f"Updated metadata for {coll_name}")
 
 @ws_service_blueprint.route("/<configroot>/remove_algorithm/<alg>/<ver>/", methods=["POST", "DELETE"])
 @context.security.authentication_required
