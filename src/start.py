@@ -2,11 +2,8 @@ from flask import Flask, current_app
 import logging
 import os
 import sys
-import json
-import requests
 import uuid
 from datetime import datetime
-import pytz
 
 
 from context import app
@@ -14,6 +11,12 @@ from services.ws_service import ws_service_blueprint
 
 __author__ = 'mshankar@slac.stanford.edu'
 
+logging.basicConfig(
+    level=os.environ.get("LOG_LEVEL", "INFO").upper(),
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
+logger = logging.getLogger(__name__)
+logging.getLogger("pymongo").setLevel(logging.WARNING)
 
 # Initialize application.
 app = Flask("configdb_server")
@@ -21,16 +24,6 @@ app = Flask("configdb_server")
 app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 300;
 app.secret_key = "All Flask apps seem to need a secret key"
 app.debug = False
-
-root = logging.getLogger()
-root.setLevel(logging.getLevelName(os.environ.get("LOG_LEVEL", "INFO")))
-ch = logging.StreamHandler(sys.stdout)
-ch.setLevel(logging.DEBUG)
-formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-ch.setFormatter(formatter)
-root.addHandler(ch)
-
-logger = logging.getLogger(__name__)
 
 
 # Register routes.

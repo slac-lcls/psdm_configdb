@@ -17,7 +17,7 @@
       containers:
       - name: configdb
         image: psdm_configdb:latest
-        imagePullPolicy: Always
+        imagePullPolicy: IfNotPresent
         envFrom:
         - configMapRef:
             name: configdbconfigs

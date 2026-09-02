@@ -3,7 +3,7 @@ namespace: dev
 configMapGenerator:
 - name: configdbconfigs
   literals:
-  - LOG_LEVEL=INFO
+  - LOG_LEVEL=DEBUG
   - CONFIGDB_URL_TMPL='mongodb://${CONFIGDB_USER}:${CONFIGDB_PWD}@${CONFIGDB_HOSTS}/?authSource=admin'
   - CONFIGDB_HOSTS_FILE="/work/secrets/configdb_hosts"
   - CONFIGDB_USER_FILE="/work/secrets/configdb_username"
@@ -35,3 +35,11 @@ secretGenerator:
   - etc/.secrets/roledb_username
   - etc/.secrets/roledb_password
 
+patchesJson6902:
+- target:
+    kind: Deployment
+    name: configdb
+  patch: |-
+    - op: replace
+      path: /spec/template/spec/containers/0/imagePullPolicy
+      value: Always
