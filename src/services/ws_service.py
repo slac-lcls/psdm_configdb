@@ -572,6 +572,54 @@ def int64_to_uint64(val):
         return {k: int64_to_uint64(v) for k, v in val.items()}
     return val
 
+def is_uint64_spec(spec):
+    """Check if a parameter specification defines UINT64 (or array of UINT64)."""
+    if not isinstance(spec, dict):
+        return False
+
+    p_type = spec.get("type")
+    p_ref = spec.get("$ref", "")
+
+    if p_type == "UINT64" or p_ref.endswith("UINT64"):
+        return True
+
+    if p_type == "array":
+        items = spec.get("items", {})
+        return is_uint64_spec(items)
+
+    return False
+
+def schema_aware_uint64_convert(params, schema, to_signed = True):
+    """Convert parameters defined is UINT64 to a signed representation.
+
+    MongoDB supports only signed integers. Unsigned (UINT64) XTC2 parameters are
+    converted to their 2's complement signed version for storage to avoid errors
+    if they are large. On retrieval, the inverse process is applied to get back
+    an unsigned. Only UINT64 parameters, as specified in the schema, are converted.
+
+    Args:
+        params (dict): The parameter set.
+
+        schema (dict): The XTC2 types schema.
+
+        to_signed (bool): If True, convert UINT64 (>= 2^63) to 2's complement INT64.
+            If False, convert INT64 (< 0) back to unsigned UINT64.
+    """
+    if not isinstance(params, dict) or not isinstance(schema, dict):
+        return params
+
+    properties = schema.get("properties", schema)
+    converted = dict(params)
+    for key, val in params.items():
+        if key in properties and is_uint64_spec(properties[key]):
+            if to_signed:
+                converted[key] = uint64_to_int64(val)
+            else:
+                converted[key] = int64_to_uint64(val)
+
+    return converted
+
+
 @ws_service_blueprint.route("/<configroot>/get_algorithms/", methods=["GET"])
 def svc_get_algorithms(configroot):
     """
@@ -648,9 +696,13 @@ def svc_get_algorithm_presets(configroot, alg, ver):
                 status_code=404,
             )
 
+        schema_doc = cdb[coll_name].find_one({"_id": "_schema"}) or {}
+        schema = schema_doc.get("json_schema", {})
         for preset in presets:
             if "parameters" in preset:
-                preset["parameters"] = int64_to_uint64(preset["parameters"])
+                preset["parameters"] = schema_aware_uint64_convert(
+                    preset["parameters"], schema, to_signed=False
+                )
             # The ObjectId field is not JSON serializable
             preset["_id"] = str(preset["_id"])
 
@@ -710,8 +762,13 @@ def svc_get_algorithm_params(configroot, alg, ver):
                     status_code=404,
                 )
 
+        schema_doc = cdb[coll_name].find_one({"_id": "_schema"}) or {}
+        schema = schema_doc.get("json_schema", {})
+
         if "parameters" in params:
-            params["parameters"] = int64_to_uint64(params["parameters"])
+            params["parameters"] = schema_aware_uint64_convert(
+                params["parameters"], schema, to_signed=False
+            )
 
         # Sanitize the ObjectId
         params["_id"] = str(params["_id"])
@@ -956,7 +1013,9 @@ def svc_add_new_algorithm(configroot, alg, ver):
     defaults_id = None
     if defaults:
         try:
-            defaults_converted = uint64_to_int64(defaults)
+            defaults_converted = schema_aware_uint64_convert(
+                defaults, schema, to_signed=True
+            )
             res = cdb[coll_name].insert_one(
                 {
                     "preset_name": preset_name,
@@ -1024,11 +1083,12 @@ def svc_add_algorithm_params(configroot, alg, ver):
 
     coll_name = f"drp_alg_{alg}_{ver}"
 
+    schema_doc = cdb[coll_name].find_one({"_id": "_schema"}) or {}
     if not soname:
-        schema_doc = cdb[coll_name].find_one({"_id": "_schema"}) or {}
         soname = schema_doc.get("soname", "")
 
-    params_converted = uint64_to_int64(params)
+    schema = schema_doc.get("json_schema", {})
+    params_converted = schema_aware_uint64_convert(params, schema, to_signed=True)
     doc = {
         "preset_name": preset_name,
         "created_by": opr,
