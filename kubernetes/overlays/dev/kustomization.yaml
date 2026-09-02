@@ -23,7 +23,7 @@ bases:
 images:
 - name: psdm_configdb
   newName: cr.stanford.edu/psdm/psdm_k8s_images/slaclab/psdm_configdb
-  newTag: 0.0.1
+  newTag: dev
 
 secretGenerator:
 - name: configdb-secrets
