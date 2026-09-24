@@ -940,10 +940,10 @@ def construct_alg_db_schema(alg_ver_schema):
 
     return full_schema
 
-@ws_service_blueprint.route("/<configroot>/new_algorithm/<alg>/<ver>/", methods=["POST"])
+@ws_service_blueprint.route("/<configroot>/new_algorithm/<hutch>/<alg>/<ver>/", methods=["POST"])
 @context.security.authentication_required
 @context.security.authorization_required("config_edit")
-def svc_add_new_algorithm(configroot, alg, ver):
+def svc_add_new_algorithm(configroot, hutch, alg, ver):
     """
     Add a new algorithm for the first time.
 
@@ -1055,10 +1055,10 @@ def svc_add_new_algorithm(configroot, alg, ver):
 
     return ok_response(value={"collection": coll_name, "params_id": defaults_id})
 
-@ws_service_blueprint.route("/<configroot>/add_algorithm_params/<alg>/<ver>/", methods=["POST"])
+@ws_service_blueprint.route("/<configroot>/add_algorithm_params/<hutch>/<alg>/<ver>/", methods=["POST"])
 @context.security.authentication_required
 @context.security.authorization_required("config_edit")
-def svc_add_algorithm_params(configroot, alg, ver):
+def svc_add_algorithm_params(configroot, hutch, alg, ver):
     """
     Add a new parameter set for a version of an algorithm.
 
@@ -1117,10 +1117,10 @@ def svc_add_algorithm_params(configroot, alg, ver):
             status_code=500,
         )
 
-@ws_service_blueprint.route("/<configroot>/update_algorithm_metadata/<alg>/<ver>/", methods=["POST"])
+@ws_service_blueprint.route("/<configroot>/update_algorithm_metadata/<hutch>/<alg>/<ver>/", methods=["POST"])
 @context.security.authentication_required
 @context.security.authorization_required("config_edit")
-def svc_update_algorithm_metadata(configroot, alg, ver):
+def svc_update_algorithm_metadata(configroot, hutch, alg, ver):
     """
     Update the metadata for an algorithm without changing the underlying parameters.
 
@@ -1150,10 +1150,10 @@ def svc_update_algorithm_metadata(configroot, alg, ver):
 
     return ok_response(value=f"Updated metadata for {coll_name}")
 
-@ws_service_blueprint.route("/<configroot>/remove_algorithm/<alg>/<ver>/", methods=["POST", "DELETE"])
+@ws_service_blueprint.route("/<configroot>/remove_algorithm/<hutch>/<alg>/<ver>/", methods=["POST", "DELETE"])
 @context.security.authentication_required
 @context.security.authorization_required("config_edit")
-def svc_remove_algorithm(configroot, alg, ver):
+def svc_remove_algorithm(configroot, hutch, alg, ver):
     """
     Remove a specific version of an algorithm, or pass ver='all' to delete all versions.
 
